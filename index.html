@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>사칙연산 슬라임 퍼즐 – No‑Build Prototype</title>
+    <!-- Tailwind CDN for quick styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      html, body { height: 100%; }
+      body { font-feature-settings: "tnum" on, "lnum" on; }
+    </style>
+    <!-- React 18 UMD + Babel (so we can write JSX without a build step) -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  </head>
+  <body class="bg-slate-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useEffect, useMemo, useRef, useState } = React;
+
+      // --- Config ---
+      const SIZE = 5; // 5x5
+      const MAX_ABS_VALUE = 9999;
+      const OPSET = ["+", "-", "×", "÷"]; // display operators
+
+      function clampInt(n) {
+        if (n > MAX_ABS_VALUE) return MAX_ABS_VALUE;
+        if (n < -MAX_ABS_VALUE) return -MAX_ABS_VALUE;
+        return Math.trunc(n);
+      }
+
+      function randInt(min, max) {
+        return Math.floor(Math.random() * (max - min + 1)) + min;
+      }
+
+      function shuffle(arr) {
+        const a = [...arr];
+        for (let i = a.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [a[i], a[j]] = [a[j], a[i]];
+        }
+        return a;
+      }
+
+      function neighbors([r, c]) {
+        const cand = [
+          [r - 1, c],
+          [r + 1, c],
+          [r, c - 1],
+          [r, c + 1],
+        ];
+        return cand.filter(([rr, cc]) => rr >= 0 && rr < SIZE && cc >= 0 && cc < SIZE);
+      }
+
+      function posKey([r, c]) {
+        return `${r},${c}`;
+      }
+
+      function applyOp(value, opSym, k) {
+        switch (opSym) {
+          case "+":
+            return clampInt(value + k);
+          case "-":
+            return clampInt(value - k);
+          case "×":
+            return clampInt(value * k);
+          case "÷":
+            if (k === 0) return value; // avoid
+            if (value % k !== 0) return null; // invalid (would create fraction)
+            return clampInt(value / k);
+          default:
+            return value;
+        }
+      }
+
+      function genSolvableLevel(size = SIZE) {
+        // 1) pick start & goal
+        const start = [randInt(0, size - 1), randInt(0, size - 1)];
+        let goal;
+        do {
+          goal = [randInt(0, size - 1), randInt(0, size - 1)];
+        } while (posKey(goal) === posKey(start));
+
+        // 2) make a simple random self-avoiding path from start to goal
+        let path = [start];
+        const visited = new Set([posKey(start)]);
+
+        // try multiple attempts to reach goal
+        const maxAttempts = 4000;
+        let attempts = 0;
+        while (posKey(path[path.length - 1]) !== posKey(goal) && attempts < maxAttempts) {
+          attempts++;
+          const here = path[path.length - 1];
+          const ns = shuffle(neighbors(here)).filter((p) => !visited.has(posKey(p)));
+          if (ns.length === 0) {
+            // dead end → backtrack
+            if (path.length <= 1) {
+              // restart
+              path = [start];
+              visited.clear();
+              visited.add(posKey(start));
+            } else {
+              visited.delete(posKey(path.pop()));
+            }
+            continue;
+          }
+          // heuristic: prefer tiles that are closer to goal sometimes
+          ns.sort((a, b) => {
+            const da = Math.abs(a[0] - goal[0]) + Math.abs(a[1] - goal[1]);
+            const db = Math.abs(b[0] - goal[0]) + Math.abs(b[1] - goal[1]);
+            return da - db + (Math.random() - 0.5); // slight randomness
+          });
+          const nxt = ns[0];
+          path.push(nxt);
+          visited.add(posKey(nxt));
+
+          // safety: cap path length
+          if (path.length > size * size * 2) break;
+        }
+
+        if (posKey(path[path.length - 1]) !== posKey(goal)) {
+          // fallback: direct Manhattan to goal
+          path = [start];
+          let cur = [...start];
+          while (cur[0] !== goal[0]) {
+            cur = [cur[0] + Math.sign(goal[0] - cur[0]), cur[1]];
+            path.push(cur);
+          }
+          while (cur[1] !== goal[1]) {
+            cur = [cur[0], cur[1] + Math.sign(goal[1] - cur[1])];
+            path.push(cur);
+          }
+        }
+
+        // 3) choose start value & operations along the path (excluding start & goal)
+        const startValue = randInt(3, 15);
+        let curVal = startValue;
+        const opsOnPath = {};
+
+        for (let i = 1; i < path.length - 1; i++) {
+          const key = posKey(path[i]);
+          let opSym;
+          let k;
+
+          const tryOrder = shuffle(["×", "+", "-", "÷"]);
+          let assigned = false;
+          for (const cand of tryOrder) {
+            if (cand === "×") {
+              k = randInt(2, 4);
+              const v = applyOp(curVal, "×", k);
+              if (v !== null && Math.abs(v) <= MAX_ABS_VALUE) {
+                opSym = "×"; curVal = v; assigned = true; break;
+              }
+            } else if (cand === "+") {
+              k = randInt(1, 9);
+              const v = applyOp(curVal, "+", k);
+              if (v !== null) { opSym = "+"; curVal = v; assigned = true; break; }
+            } else if (cand === "-") {
+              k = randInt(1, 9);
+              const v = applyOp(curVal, "-", k);
+              if (v !== null) { opSym = "-"; curVal = v; assigned = true; break; }
+            } else if (cand === "÷") {
+              // choose a divisor 2..4 that divides curVal
+              const divisors = [2,3,4].filter((d) => curVal % d === 0);
+              if (divisors.length) {
+                k = divisors[randInt(0, divisors.length - 1)];
+                const v = applyOp(curVal, "÷", k);
+                if (v !== null) { opSym = "÷"; curVal = v; assigned = true; break; }
+              }
+            }
+          }
+
+          if (!assigned) {
+            // guaranteed fallback
+            opSym = "+"; k = 1; curVal = applyOp(curVal, "+", 1);
+          }
+
+          opsOnPath[key] = { op: opSym, k };
+        }
+
+        const targetValue = curVal; // value when arriving at GOAL along the designed path
+        const maxSteps = path.length - 1; // moves needed if perfect
+
+        // 4) build board with distractors elsewhere
+        const board = Array.from({ length: size }, (_, r) =>
+          Array.from({ length: size }, (_, c) => ({ type: "op", op: "+", k: 1 }))
+        );
+
+        // fill path ops
+        for (let i = 1; i < path.length - 1; i++) {
+          const [r, c] = path[i];
+          const { op, k } = opsOnPath[posKey([r, c])];
+          board[r][c] = { type: "op", op, k };
+        }
+
+        // fill distractors
+        for (let r = 0; r < size; r++) {
+          for (let c = 0; c < size; c++) {
+            const key = posKey([r, c]);
+            if (key in opsOnPath || posKey([r, c]) === posKey(start) || posKey([r, c]) === posKey(goal)) continue;
+            // random op
+            const op = OPSET[randInt(0, OPSET.length - 1)];
+            let k = op === "×" || op === "÷" ? randInt(2, 4) : randInt(1, 9);
+            // keep ÷ more often valid by preferring 2 or 3
+            if (op === "÷") k = [2, 3, 4][randInt(0, 2)];
+            board[r][c] = { type: "op", op, k };
+          }
+        }
+
+        return { start, goal, startValue, targetValue, maxSteps, board, path };
+      }
+
+      function Tile({ isStart, isGoal, isCurrent, data, onClick, disabled, visited }) {
+        const label = isStart
+          ? "START"
+          : isGoal
+          ? "GOAL"
+          : `${data.op}${data.k}`;
+        return (
+          <button
+            onClick={onClick}
+            disabled={disabled}
+            className={[
+              "w-16 h-16 sm:w-20 sm:h-20 rounded-2xl border flex items-center justify-center text-lg sm:text-xl font-bold select-none",
+              "transition-all duration-150",
+              isStart ? "bg-emerald-100 border-emerald-400" :
+              isGoal ? "bg-amber-100 border-amber-400" :
+              visited ? "bg-slate-200 border-slate-300" :
+              "bg-white border-slate-300 hover:shadow-md",
+              isCurrent ? "ring-4 ring-emerald-400" : ""
+            ].join(" ")}
+            aria-label={label}
+            title={label}
+          >
+            <span>{label}</span>
+          </button>
+        );
+      }
+
+      function ArithmeticSlimePuzzle() {
+        const [seed, setSeed] = useState(() => Math.random().toString(36).slice(2, 8));
+        const [level, setLevel] = useState(() => genSolvableLevel());
+        const [pos, setPos] = useState(level.start);
+        const [value, setValue] = useState(level.startValue);
+        const [moves, setMoves] = useState(0);
+        const [history, setHistory] = useState([]); // for undo: items of {pos, value}
+        const [won, setWon] = useState(false);
+        const [lost, setLost] = useState(false);
+
+        const posStr = posKey(pos);
+
+        const visited = useMemo(() => new Set([posStr, ...history.map((h) => posKey(h.pos))]), [posStr, history]);
+
+        const reset = () => {
+          const lv = genSolvableLevel();
+          setLevel(lv);
+          setPos(lv.start);
+          setValue(lv.startValue);
+          setMoves(0);
+          setHistory([]);
+          setWon(false);
+          setLost(false);
+          setSeed(Math.random().toString(36).slice(2, 8));
+        };
+
+        const canStepTo = (r, c) => {
+          const [rr, cc] = pos;
+          const manhattan = Math.abs(r - rr) + Math.abs(c - cc);
+          return manhattan === 1; // 4-directional only
+        };
+
+        const [toast, setToast] = useState("");
+        const tRef = useRef(null);
+        const flash = (msg) => {
+          setToast(msg);
+          clearTimeout(tRef.current);
+          // FIXED: removed stray semicolon inside the arrow function (syntax error)
+          tRef.current = setTimeout(() => setToast(""), 1500);
+        };
+
+        const step = (r, c) => {
+          if (won || lost) return;
+          if (!canStepTo(r, c)) return;
+          const isGoal = posKey([r, c]) === posKey(level.goal);
+          const data = level.board[r][c];
+          const newVal = isGoal ? value : applyOp(value, data.op, data.k);
+          if (!isGoal && newVal === null) {
+            // invalid division (fraction) → block move feedback
+            flash("😵 나눗셈이 딱 나누어떨어지지 않아요!");
+            return;
+          }
+
+          setHistory((h) => [...h, { pos, value }]);
+          setPos([r, c]);
+          setMoves((m) => m + 1);
+          setValue(isGoal ? value : newVal);
+
+          if (isGoal) {
+            if (value === level.targetValue) {
+              setWon(true);
+              flash("🎉 정답! 목표 숫자에 도달했어요.");
+            } else {
+              setLost(true);
+              flash(`❌ 목표(${level.targetValue})와 값(${value})이 달라요.`);
+            }
+            return;
+          }
+
+          if (history.length + 1 > level.maxSteps) {
+            setLost(true);
+            flash("⌛ 이동 횟수를 초과했어요.");
+            return;
+          }
+        };
+
+        const undo = () => {
+          if (!history.length || won || lost) return;
+          const last = history[history.length - 1];
+          setHistory((h) => h.slice(0, -1));
+          setPos(last.pos);
+          setValue(last.value);
+          setMoves((m) => Math.max(0, m - 1));
+        };
+
+        // keyboard controls
+        useEffect(() => {
+          const onKey = (e) => {
+            const [r, c] = pos;
+            if (["ArrowUp", "KeyW"].includes(e.code)) { step(Math.max(0, r - 1), c); }
+            else if (["ArrowDown", "KeyS"].includes(e.code)) { step(Math.min(SIZE - 1, r + 1), c); }
+            else if (["ArrowLeft", "KeyA"].includes(e.code)) { step(r, Math.max(0, c - 1)); }
+            else if (["ArrowRight", "KeyD"].includes(e.code)) { step(r, Math.min(SIZE - 1, c + 1)); }
+            else if (e.code === "KeyZ" && (e.ctrlKey || e.metaKey)) { undo(); }
+            else if (e.code === "KeyR") { reset(); }
+          };
+          window.addEventListener("keydown", onKey);
+          return () => window.removeEventListener("keydown", onKey);
+        }, [pos, history, level, value, won, lost]);
+
+        const progress = Math.min(100, Math.round((moves / level.maxSteps) * 100));
+
+        return (
+          <div className="min-h-screen w-full text-slate-800 flex items-center justify-center p-4">
+            <div className="w-full max-w-3xl">
+              <header className="mb-4">
+                <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">사칙연산 슬라임 퍼즐</h1>
+                <p className="text-sm text-slate-500 mt-1">키보드 화살표(또는 WASD)로 이동 · Ctrl/⌘+Z 되돌리기 · R 새 퍼즐</p>
+              </header>
+
+              <section className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="bg-white rounded-2xl p-4 shadow-sm border">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-slate-500">현재 값</span>
+                    <span className="text-2xl font-black tabular-nums">{value}</span>
+                  </div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-slate-500">목표 숫자</span>
+                    <span className="text-2xl font-black tabular-nums text-amber-600">{level.targetValue}</span>
+                  </div>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-sm text-slate-500">남은 이동</span>
+                    <span className="text-lg font-bold tabular-nums">{Math.max(0, level.maxSteps - moves)}</span>
+                  </div>
+                  <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
+                    <div className="h-full bg-emerald-400" style={{ width: `${progress}%` }} />
+                  </div>
+
+                  <div className="mt-4 flex gap-2">
+                    <button onClick={reset} className="px-3 py-2 rounded-xl border shadow-sm hover:shadow bg-white">새 퍼즐</button>
+                    <button onClick={undo} className="px-3 py-2 rounded-xl border shadow-sm hover:shadow bg-white disabled:opacity-50" disabled={!history.length}>되돌리기</button>
+                  </div>
+
+                  {(won || lost) && (
+                    <div className={`mt-3 text-sm font-semibold ${won ? "text-emerald-600" : "text-rose-600"}`}>
+                      {won ? "정답! 퍼즐을 해결했습니다." : "실패! 다시 도전해 보세요."}
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-white rounded-2xl p-4 shadow-sm border">
+                  <div className="grid grid-cols-5 gap-2 place-items-center">
+                    {level.board.map((row, r) =>
+                      row.map((cell, c) => {
+                        const isStart = posKey([r, c]) === posKey(level.start);
+                        const isGoal = posKey([r, c]) === posKey(level.goal);
+                        const isCurrent = posKey([r, c]) === posKey(pos);
+                        return (
+                          <Tile
+                            key={`${r}-${c}`}
+                            isStart={isStart}
+                            isGoal={isGoal}
+                            isCurrent={isCurrent}
+                            data={cell}
+                            visited={visited.has(posKey([r, c]))}
+                            onClick={() => step(r, c)}
+                            disabled={won || lost}
+                          />
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              </section>
+
+              {!!toast && (
+                <div className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-sm px-4 py-2 rounded-xl shadow-lg">
+                  {toast}
+                </div>
+              )}
+
+              <footer className="mt-6 text-xs text-slate-500">
+                <p>규칙: <strong>START</strong>에서 시작해 상하좌우로 이동합니다. 이동한 칸의 연산(<em>+n, -n, ×n, ÷n</em>)이 현재 값에 즉시 적용됩니다. <strong>GOAL</strong>에 도착했을 때 값이 <strong>목표 숫자</strong>와 일치하면 클리어! 이동 횟수는 설계된 정답 경로 길이만큼 허용됩니다.</p>
+              </footer>
+            </div>
+          </div>
+        );
+      }
+
+      // -----------------------------
+      // Lightweight Unit Tests (console)
+      // -----------------------------
+      function assert(name, cond) {
+        if (!cond) {
+          console.error(`❌ [TEST FAIL] ${name}`);
+        } else {
+          console.log(`✅ [TEST PASS] ${name}`);
+        }
+      }
+
+      function runUnitTests() {
+        try {
+          // applyOp tests
+          assert("applyOp +", applyOp(5, "+", 3) === 8);
+          assert("applyOp -", applyOp(5, "-", 7) === -2);
+          assert("applyOp ×", applyOp(6, "×", 4) === 24);
+          assert("applyOp ÷ integer", applyOp(12, "÷", 3) === 4);
+          assert("applyOp ÷ non-integer -> null", applyOp(10, "÷", 3) === null);
+          assert("applyOp ÷ by 0 returns same", applyOp(10, "÷", 0) === 10);
+
+          // level generation invariants
+          const lv = genSolvableLevel();
+          assert("start != goal", posKey(lv.start) !== posKey(lv.goal));
+          assert("maxSteps == path.length-1", lv.maxSteps === lv.path.length - 1);
+
+          // Recompute along path and compare with targetValue
+          let v = lv.startValue;
+          for (let i = 1; i < lv.path.length - 1; i++) {
+            const [r, c] = lv.path[i];
+            const cell = lv.board[r][c];
+            v = applyOp(v, cell.op, cell.k);
+            // Every division along the designed path should be exact
+            assert(`division exact at step ${i}`, v !== null);
+          }
+          assert("recomputed value equals targetValue", v === lv.targetValue);
+
+          console.log("\nAll tests completed.\n");
+        } catch (err) {
+          console.error("❌ [TEST ERROR]", err);
+        }
+      }
+
+      // Render
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(<ArithmeticSlimePuzzle />);
+
+      // Run tests once per page load
+      if (!window.__ARITH_SLIME_TESTED__) {
+        window.__ARITH_SLIME_TESTED__ = true;
+        runUnitTests();
+      }
+    </script>
+  </body>
+</html>
