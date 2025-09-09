@@ -9,8 +9,13 @@
     <style>
       html, body { height: 100%; }
       body { font-feature-settings: "tnum" on, "lnum" on; }
+      @keyframes slimePulse {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.1); }
+      }
       .slime {
         backdrop-filter: blur(2px);
+        animation: slimePulse 1.5s ease-in-out infinite;
       }
     </style>
     <!-- React 18 UMD + Babel (JSX without build) -->
@@ -191,7 +196,7 @@
       // ------------------------------
       // UI Tiles: floor (op text) + slime overlay at current position
       // ------------------------------
-      function Tile({ isStart, isGoal, isCurrent, data, onClick }) {
+      function Tile({ isStart, isGoal, isCurrent, data, onClick, targetValue }) {
         return (
           <div
             onClick={onClick}
@@ -206,8 +211,11 @@
             title={isStart?"START":isGoal?"GOAL":`${data.op}${data.k}`}
           >
             {/* Floor label */}
-            <div className="text-base sm:text-lg font-bold text-slate-700 pointer-events-none">
-              {isStart ? "START" : isGoal ? "GOAL" : <>{data.op}{data.k}</>}
+            <div className="text-base sm:text-lg font-bold text-slate-700 pointer-events-none flex flex-col items-center leading-none">
+              {isStart ? "START" : isGoal ? <>
+                <span>GOAL</span>
+                <span className="text-xs sm:text-sm text-amber-600">{targetValue}</span>
+              </> : <>{data.op}{data.k}</>}
             </div>
             {/* Slime overlay (only on current) */}
             {isCurrent && (
@@ -376,6 +384,7 @@
                               isStart={isStart}
                               isGoal={isGoal}
                               isCurrent={isCurrent}
+                              targetValue={level.targetValue}
                               data={cell}
                               onClick={()=>step(r,c)}
                             />
