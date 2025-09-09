@@ -47,7 +47,10 @@
         if (stage >= 51) ops = ["+", "-", "×"];
         if (stage >= 76) ops = ["+", "-", "×", "÷"];
 
-        return { size, ops };
+        // early stages shouldn't have identical start/target values
+        const avoidSameStartTarget = stage <= 10;
+
+        return { size, ops, avoidSameStartTarget };
       }
 
       // ------------------------------
@@ -104,93 +107,101 @@
       // ------------------------------
       // Level generator (respects size & allowed ops)
       // ------------------------------
-      function genSolvableLevel({ size, ops, seed }) {
+      function genSolvableLevel({ size, ops, seed, avoidSameStartTarget }) {
         const rng = seededRandom(seed);
         const rint = (a,b)=>randInt(a,b,rng);
 
-        // 1) choose start & goal
-        const start = [rint(0,size-1), rint(0,size-1)];
-        let goal;
-        do { goal = [rint(0,size-1), rint(0,size-1)]; } while (posKey(goal)===posKey(start));
+        const generateOnce = () => {
+          // 1) choose start & goal
+          const start = [rint(0,size-1), rint(0,size-1)];
+          let goal;
+          do { goal = [rint(0,size-1), rint(0,size-1)]; } while (posKey(goal)===posKey(start));
 
-        // 2) random self-avoiding path
-        let path = [start];
-        const visited = new Set([posKey(start)]);
-        const MAX_ATTEMPTS = 4000;
-        let attempts = 0;
-        while (posKey(path[path.length-1])!==posKey(goal) && attempts<MAX_ATTEMPTS) {
-          attempts++;
-          const here = path[path.length-1];
-          const ns = shuffle(neighbors(here,size), rng).filter(p=>!visited.has(posKey(p)));
-          if (!ns.length) {
-            if (path.length<=1) { path=[start]; visited.clear(); visited.add(posKey(start)); }
-            else { visited.delete(posKey(path.pop())); }
-            continue;
+          // 2) random self-avoiding path
+          let path = [start];
+          const visited = new Set([posKey(start)]);
+          const MAX_ATTEMPTS = 4000;
+          let attempts = 0;
+          while (posKey(path[path.length-1])!==posKey(goal) && attempts<MAX_ATTEMPTS) {
+            attempts++;
+            const here = path[path.length-1];
+            const ns = shuffle(neighbors(here,size), rng).filter(p=>!visited.has(posKey(p)));
+            if (!ns.length) {
+              if (path.length<=1) { path=[start]; visited.clear(); visited.add(posKey(start)); }
+              else { visited.delete(posKey(path.pop())); }
+              continue;
+            }
+            ns.sort((a,b)=>{
+              const da=Math.abs(a[0]-goal[0])+Math.abs(a[1]-goal[1]);
+              const db=Math.abs(b[0]-goal[0])+Math.abs(b[1]-goal[1]);
+              return da-db + (rng()-0.5);
+            });
+            const nxt = ns[0];
+            path.push(nxt); visited.add(posKey(nxt));
+            if (path.length > size*size*2) break;
           }
-          ns.sort((a,b)=>{
-            const da=Math.abs(a[0]-goal[0])+Math.abs(a[1]-goal[1]);
-            const db=Math.abs(b[0]-goal[0])+Math.abs(b[1]-goal[1]);
-            return da-db + (rng()-0.5);
-          });
-          const nxt = ns[0];
-          path.push(nxt); visited.add(posKey(nxt));
-          if (path.length > size*size*2) break;
-        }
-        if (posKey(path[path.length-1])!==posKey(goal)) {
-          // fallback: direct Manhattan
-          path = [start];
-          let cur=[...start];
-          while (cur[0]!==goal[0]) { cur=[cur[0]+Math.sign(goal[0]-cur[0]),cur[1]]; path.push(cur); }
-          while (cur[1]!==goal[1]) { cur=[cur[0],cur[1]+Math.sign(goal[1]-cur[1])]; path.push(cur); }
-        }
+          if (posKey(path[path.length-1])!==posKey(goal)) {
+            // fallback: direct Manhattan
+            path = [start];
+            let cur=[...start];
+            while (cur[0]!==goal[0]) { cur=[cur[0]+Math.sign(goal[0]-cur[0]),cur[1]]; path.push(cur); }
+            while (cur[1]!==goal[1]) { cur=[cur[0],cur[1]+Math.sign(goal[1]-cur[1])]; path.push(cur); }
+          }
 
-        // 3) choose start value & operations along the path
-        const startValue = rint(3, 9); // gentler start for early stages
-        let curVal = startValue;
-        const opsOnPath = {};
+          // 3) choose start value & operations along the path
+          const startValue = rint(3, 9); // gentler start for early stages
+          let curVal = startValue;
+          const opsOnPath = {};
 
-        const pickK = (op) => {
-          if (op === "+") return rint(1, 5);
-          if (op === "-") return rint(1, 5);
-          if (op === "×") return rint(2, 3);
-          if (op === "÷") return [2,3].filter(d=>curVal%d===0)[rint(0,1)] ?? 2;
-          return 1;
+          const pickK = (op) => {
+            if (op === "+") return rint(1, 5);
+            if (op === "-") return rint(1, 5);
+            if (op === "×") return rint(2, 3);
+            if (op === "÷") return [2,3].filter(d=>curVal%d===0)[rint(0,1)] ?? 2;
+            return 1;
+          };
+
+          for (let i=1;i<path.length-1;i++) {
+            const key = posKey(path[i]);
+            let assigned=false, chosenOp=null, k=1;
+            const tryOrder = shuffle(ops, rng);
+            for (const op of tryOrder) {
+              k = pickK(op);
+              const v = applyOp(curVal, op, k);
+              if (v!==null && Math.abs(v)<=9999) { chosenOp=op; curVal=v; assigned=true; break; }
+            }
+            if (!assigned) { chosenOp = "+"; k=1; curVal = applyOp(curVal, "+", 1); }
+            opsOnPath[key] = { op: chosenOp, k };
+          }
+
+          const targetValue = curVal;
+          const maxSteps = path.length-1;
+
+          // 4) build board
+          const board = Array.from({length:size}, ()=>Array.from({length:size}, ()=>({op:"+",k:1})));
+          for (let i=1;i<path.length-1;i++) {
+            const [r,c] = path[i];
+            const {op,k} = opsOnPath[posKey([r,c])];
+            board[r][c] = { op, k };
+          }
+          // distractors
+          for (let r=0;r<size;r++) for (let c=0;c<size;c++) {
+            const key = posKey([r,c]);
+            if (key in opsOnPath || posKey([r,c])===posKey(start) || posKey([r,c])===posKey(goal)) continue;
+            const op = ops[randInt(0, ops.length-1, rng)];
+            let k = (op==="×"||op==="÷") ? rint(2,3) : rint(1,5);
+            if (op==="÷") k = [2,3][randInt(0,1,rng)];
+            board[r][c] = { op, k };
+          }
+
+          return { size, start, goal, startValue, targetValue, maxSteps, board, path };
         };
 
-        for (let i=1;i<path.length-1;i++) {
-          const key = posKey(path[i]);
-          let assigned=false, chosenOp=null, k=1;
-          const tryOrder = shuffle(ops, rng);
-          for (const op of tryOrder) {
-            k = pickK(op);
-            const v = applyOp(curVal, op, k);
-            if (v!==null && Math.abs(v)<=9999) { chosenOp=op; curVal=v; assigned=true; break; }
-          }
-          if (!assigned) { chosenOp = "+"; k=1; curVal = applyOp(curVal, "+", 1); }
-          opsOnPath[key] = { op: chosenOp, k };
-        }
-
-        const targetValue = curVal;
-        const maxSteps = path.length-1;
-
-        // 4) build board
-        const board = Array.from({length:size}, ()=>Array.from({length:size}, ()=>({op:"+",k:1})));
-        for (let i=1;i<path.length-1;i++) {
-          const [r,c] = path[i];
-          const {op,k} = opsOnPath[posKey([r,c])];
-          board[r][c] = { op, k };
-        }
-        // distractors
-        for (let r=0;r<size;r++) for (let c=0;c<size;c++) {
-          const key = posKey([r,c]);
-          if (key in opsOnPath || posKey([r,c])===posKey(start) || posKey([r,c])===posKey(goal)) continue;
-          const op = ops[randInt(0, ops.length-1, rng)];
-          let k = (op==="×"||op==="÷") ? rint(2,3) : rint(1,5);
-          if (op==="÷") k = [2,3][randInt(0,1,rng)];
-          board[r][c] = { op, k };
-        }
-
-        return { size, start, goal, startValue, targetValue, maxSteps, board, path };
+        let lv;
+        do {
+          lv = generateOnce();
+        } while (avoidSameStartTarget && lv.startValue === lv.targetValue);
+        return lv;
       }
 
       // ------------------------------
@@ -237,11 +248,11 @@
           const cleared = Number(localStorage.getItem("arith_cleared")||"0");
           return Math.min(cleared+1 || 1, MAX_STAGE);
         });
-        const { size, ops } = stageConfig(stage);
+        const { size, ops, avoidSameStartTarget } = stageConfig(stage);
 
         // use stage as seed to ensure fairness when sharing
         const seed = `stg_${stage}`;
-        const [level, setLevel] = useState(()=>genSolvableLevel({ size, ops, seed }));
+        const [level, setLevel] = useState(()=>genSolvableLevel({ size, ops, seed, avoidSameStartTarget }));
         const [pos, setPos] = useState(level.start);
         const [value, setValue] = useState(level.startValue);
         const [moves, setMoves] = useState(0);
@@ -267,7 +278,7 @@
         const flash = (msg) => { setToast(msg); clearTimeout(tRef.current); tRef.current = setTimeout(()=>setToast(""),1500); };
 
         const resetLevel = ()=>{
-          const lv = genSolvableLevel({ size, ops, seed });
+          const lv = genSolvableLevel({ size, ops, seed, avoidSameStartTarget });
           setLevel(lv); setPos(lv.start); setValue(lv.startValue);
           setMoves(0); setHistory([]); setWon(false); setLost(false); setStartTs(null); setElapsed(0);
         };
@@ -319,9 +330,9 @@
         };
         // when stage changes, regenerate level
         useEffect(()=>{
-          const { size, ops } = stageConfig(stage);
+          const { size, ops, avoidSameStartTarget } = stageConfig(stage);
           const seed = `stg_${stage}`;
-          const lv = genSolvableLevel({ size, ops, seed });
+          const lv = genSolvableLevel({ size, ops, seed, avoidSameStartTarget });
           setLevel(lv); setPos(lv.start); setValue(lv.startValue);
           setMoves(0); setHistory([]); setWon(false); setLost(false); setStartTs(null); setElapsed(0);
         }, [stage]);
@@ -368,7 +379,6 @@
                   </div>
 
                   {won && <div className="mt-3 text-sm font-semibold text-emerald-600">정답! 스테이지를 클리어했습니다. Enter를 눌러 다음 스테이지로 진행할 수 있어요.</div>}
-                  {lost && <div className="mt-3 text-sm font-semibold text-rose-600">실패! 다시 도전해 보세요.</div>}
                 </div>
 
                 <div className="bg-white rounded-2xl p-4 shadow-sm border">
@@ -408,6 +418,15 @@
                 </div>
               )}
 
+              {lost && (
+                <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50">
+                  <div className="bg-white rounded-2xl p-6 shadow text-center">
+                    <p className="mb-4 text-lg font-bold">스테이지 클리어 실패</p>
+                    <button onClick={resetLevel} className="px-4 py-2 rounded-xl bg-rose-500 text-white hover:bg-rose-600">다시 도전하기</button>
+                  </div>
+                </div>
+              )}
+
               <footer className="mt-6 text-xs text-slate-500 space-y-1">
                 <p>규칙: <strong>START</strong>에서 시작해 상하좌우로 이동합니다. 이동한 칸의 바닥에 적힌 연산(<em>+n, -n, ×n, ÷n</em>)이 현재 값에 즉시 적용됩니다. <strong>GOAL</strong>에 도착했을 때 값이 <strong>목표 숫자</strong>와 일치하면 클리어! 클리어하면 다음 스테이지로 자동 진행할 수 있습니다.</p>
                 <p>그래픽: 캐릭터(슬라임)는 반투명 원형으로 표시되며, 슬라임 위에 현재 값이 떠 있습니다. 각 칸 바닥에는 연산과 수치가 표기됩니다.</p>
@@ -434,9 +453,10 @@
           // generator invariants for multiple stage tiers
           const tiers = [1, 26, 51, 76, 100];
           for (const st of tiers) {
-            const { size, ops } = stageConfig(st);
-            const lv = genSolvableLevel({ size, ops, seed: `test_${st}` });
+            const { size, ops, avoidSameStartTarget } = stageConfig(st);
+            const lv = genSolvableLevel({ size, ops, seed: `test_${st}`, avoidSameStartTarget });
             assert(`stage ${st}: start!=goal`, posKey(lv.start)!==posKey(lv.goal));
+            if (avoidSameStartTarget) assert(`stage ${st}: startVal!=targetVal`, lv.startValue!==lv.targetValue);
             assert(`stage ${st}: steps ok`, lv.maxSteps===lv.path.length-1);
             // recompute along path
             let v = lv.startValue;
